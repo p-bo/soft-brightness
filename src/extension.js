@@ -101,18 +101,21 @@ const SoftBrightnessExtension = class SoftBrightnessExtension {
 	this._monitorNames              = null;
 
 	// Set/destroyed by _enableCloningMouse/_disableCloningMouse
-	this._cursorWantedVisible                 = null;
-	this._cursorTracker			  = null;
-	this._cursorTrackerSetPointerVisible	  = null;
-	this._cursorTrackerSetPointerVisibleBound = null;
-	this._cursorSprite			  = null;
-	this._cursorActor			  = null;
-	this._cursorWatcher			  = null;
+	this._cursorWantedVisible			= null;
+	this._cursorTracker				= null;
+	this._cursorTrackerSetPointerVisible		= null;
+	this._cursorTrackerSetPointerVisibleBound	= null;
+	this._cursorSprite				= null;
+	this._cursorActor				= null;
+	this._cursorWatcher				= null;
 	// Set/destroyed by _startCloningMouse / _stopCloningMouse
-	this._cursorWatch			  = null;
-	this._cursorChangedConnection		  = null;
+	this._cursorWatch				= null;
+	this._cursorChangedConnection			= null;
+	this._cursorWantedSetKeepFocusWhileHidden       = null;
+	this._cursorTrackerSetKeepFocusWhileHidden	= null;
+	this._cursorTrackerSetKeepFocusWhileHiddenBound = null;
 	// Set/destroyed by _delayedSetPointerInvisible/_clearRedrawConnection
-	this._redrawConnection                    = null;
+	this._redrawConnection                          = null;
 
 	// Set/destroyed by _enableScreenshotPatch/_disableScreenshotPatch
 	this._screenshotServiceScreenshotAsync       = null;
@@ -175,7 +178,8 @@ const SoftBrightnessExtension = class SoftBrightnessExtension {
 		if ( GLib.getenv('XDG_SESSION_TYPE') == 'wayland'
 		     && ( major > 3
 			  || (major == 3 && (minor > 33
-					     || (minor == 33 && patch > 90))))) {
+					     || (minor == 33 && patch > 90))))
+		     && Meta.CursorTracker.prototype.set_keep_focus_while_hidden == undefined ) {
 		    this._cloneMouse = false;
 		    this._logger.log('mouse cloning disabled on gnome-shell '+gnomeShellVersion+' running on Wayland');
 		}
@@ -630,9 +634,18 @@ const SoftBrightnessExtension = class SoftBrightnessExtension {
 	    this._cursorChangedConnection = this._cursorTracker.connect('cursor-changed', this._updateMouseSprite.bind(this));
 	    this._cursorWatch = this._cursorWatcher.addWatch(1, this._updateMousePosition.bind(this));
 
+	    if (this._cursorTracker.set_keep_focus_while_hidden != undefined) {
+		this._logger.log_debug('_startCloningMouse(): Gnome-Shell 3.34+ set_keep_focus_while_hidden handling');
+		this._cursorWantedSetKeepFocusWhileHidden = this._cursorTracker.get_keep_focus_while_hidden();
+		this._cursorTrackerSetKeepFocusWhileHidden = Meta.CursorTracker.prototype.set_keep_focus_while_hidden;
+		this._cursorTrackerSetKeepFocusWhileHiddenBound = this._cursorTrackerSetKeepFocusWhileHidden.bind(this._cursorTracker);
+		Meta.CursorTracker.prototype.set_keep_focus_while_hidden = this._cursorTrackerSetKeepFocusWhileHiddenReplacement.bind(this);
+	    }
+
 	    this._updateMouseSprite();
 	    this._updateMousePosition();
 	}
+	this._setKeepFocusWhileHidden(true);
 	this._setPointerVisible(false);
     }
 
@@ -648,6 +661,16 @@ const SoftBrightnessExtension = class SoftBrightnessExtension {
 	if (this._cursorWatch != null ) {
 	    this._logger.log_debug('_stopCloningMouse()');
 
+	    if (this._cursorTracker.set_keep_focus_while_hidden != undefined) {
+		this._logger.log_debug('_stopCloningMouse(): Gnome-Shell 3.34+ set_keep_focus_while_hidden restored to '
+				      +this._cursorWantedSetKeepFocusWhileHidden);
+		this._setKeepFocusWhileHidden(this._cursorWantedSetKeepFocusWhileHidden);
+		Meta.CursorTracker.prototype.set_keep_focus_while_hidden = this._cursorTrackerSetKeepFocusWhileHidden;
+		this._cursorTrackerSetKeepFocusWhileHidden = null;
+		this._cursorTrackerSetKeepFocusWhileHiddenBound = null;
+		this._cursorWantedSetKeepFocusWhileHidden = null;
+	    }
+
 	    this._cursorWatch.remove();
 	    this._cursorWatch = null;
 
@@ -658,6 +681,18 @@ const SoftBrightnessExtension = class SoftBrightnessExtension {
 	}
 
 	this._clearRedrawConnection();
+    }
+
+    _setKeepFocusWhileHidden(value) {
+	if (this._cursorTrackerSetKeepFocusWhileHidden == null) return;
+	this._logger.log_debug('_setKeepFocusWhileHidden('+value+')');
+	let boundFunc = this._cursorTrackerSetKeepFocusWhileHiddenBound;
+	boundFunc(value);
+    }
+
+    _cursorTrackerSetKeepFocusWhileHiddenReplacement(value) {
+	this._logger.log_debug('_cursorTrackerSetKeepFocusWhileHiddenReplacement('+value+')');
+	this._cursorWantedSetKeepFocusWhileHidden = value;
     }
 
     _updateMousePosition(actor, event) {
